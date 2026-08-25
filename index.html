@@ -87,8 +87,24 @@
   </div>
 
   <script>
-    // Replace with your Google Sheets Published CSV link:
-    const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTnGFKxe_SzQw5EzArsg6Hfbf-R5mOgVA9wigsN6ru6C_--oFta6FaUMjzLE_x7FSBK1Fr6Jj3ENx14/pub?gid=472028699&single=true&output=csv';
+    // 1. Paste your published Google Sheet CSV link here:
+    const SHEET_CSV_URL = 'YOUR_PUBLISHED_CSV_URL_HERE';
+
+    // 2. (Optional) Custom nickname mapping by email
+    const DISPLAY_NAMES = {
+      'alex@example.com': 'Alex',
+      // 'another.email@gmail.com': 'Sarah'
+    };
+
+    function formatEmailToName(email) {
+      if (!email || !email.includes('@')) return 'Unknown';
+      if (DISPLAY_NAMES[email.toLowerCase()]) return DISPLAY_NAMES[email.toLowerCase()];
+
+      const userHandle = email.split('@')[0];
+      return userHandle
+        .replace(/[._-]/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase());
+    }
 
     function loadData() {
       Papa.parse(SHEET_CSV_URL, {
@@ -107,50 +123,78 @@
 
     function processData(rows) {
       const users = {};
-      
+
       rows.forEach(row => {
-        // Automatically find column values based on typical Google Form naming
-        const name = row['Participant Name'] || row['Name'] || Object.values(row)[1] || 'Unknown';
-        const distractions = parseInt(row['Number of Distractions'] || Object.values(row)[4] || 0) || 0;
-        
-        if (!users[name]) {
-          users[name] = { name: name, hours: 0, distractions: 0 };
+        const cleanRow = {};
+        Object.keys(row).forEach(k => cleanRow[k.trim().toLowerCase()] = row[k]);
+
+        const emailKey = Object.keys(cleanRow).find(k => 
+          k.includes('email') || k.includes('username')
+        );
+
+        const email = emailKey ? cleanRow[emailKey].trim() : '';
+        const name = formatEmailToName(email);
+
+        if (!email || name === 'Unknown') return;
+
+        const distKey = Object.keys(cleanRow).find(k => k.includes('distraction'));
+        const distractions = parseInt(distKey ? cleanRow[distKey] : 0) || 0;
+
+        if (!users[email]) {
+          users[email] = { name: name, email: email, hours: 0, distractions: 0 };
         }
-        users[name].hours += 1; // Each form submission = 1 completed deep work hour
-        users[name].distractions += distractions;
+        users[email].hours += 1;
+        users[email].distractions += distractions;
       });
 
       const sortedUsers = Object.values(users).sort((a, b) => b.hours - a.hours);
 
       // Render Leaderboard Cards
       const leaderboardEl = document.getElementById('leaderboard');
-      leaderboardEl.innerHTML = sortedUsers.map((u, i) => `
-        <div class="card rank-${i + 1}">
-          <div class="rank-name">
-            <div class="rank-badge">${i + 1}</div>
-            <div class="user-info">
-              <h3>${u.name}</h3>
-              <span>${u.distractions} total distractions recorded</span>
+      if (sortedUsers.length === 0) {
+        leaderboardEl.innerHTML = `<p style="text-align:center; color:var(--text-muted);">No entries recorded yet.</p>`;
+      } else {
+        leaderboardEl.innerHTML = sortedUsers.map((u, i) => `
+          <div class="card rank-${i + 1}">
+            <div class="rank-name">
+              <div class="rank-badge">${i + 1}</div>
+              <div class="user-info">
+                <h3>${u.name}</h3>
+                <span>${u.distractions} total distractions recorded</span>
+              </div>
+            </div>
+            <div class="stats">
+              <div class="stat-box">
+                <div class="val">${u.hours}h</div>
+                <div class="label">Hours Logged</div>
+              </div>
             </div>
           </div>
-          <div class="stats">
-            <div class="stat-box">
-              <div class="val">${u.hours}h</div>
-              <div class="label">Hours Logged</div>
-            </div>
-          </div>
-        </div>
-      `).join('');
+        `).join('');
+      }
 
-      // Render Recent Feed (Latest 8 entries)
+      // Render Feed
       const feedEl = document.getElementById('session-feed');
-      const recentRows = rows.slice(-8).reverse();
+      const validRows = rows.filter(r => Object.values(r).some(v => v !== ''));
+      const recentRows = validRows.slice(-8).reverse();
+
       feedEl.innerHTML = recentRows.map(r => {
+        const cleanR = {};
+        Object.keys(r).forEach(k => cleanR[k.trim().toLowerCase()] = r[k]);
+
         const timestamp = Object.values(r)[0] || '';
-        const name = r['Participant Name'] || Object.values(r)[1] || '';
-        const cat = r['Category'] || Object.values(r)[2] || '';
-        const task = r['Tasks Completed in Detail'] || Object.values(r)[3] || '';
-        const dist = r['Number of Distractions'] || Object.values(r)[4] || '0';
+        const emailK = Object.keys(cleanR).find(k => k.includes('email'));
+        const email = emailK ? cleanR[emailK].trim() : '';
+        const name = formatEmailToName(email);
+
+        const catK = Object.keys(cleanR).find(k => k.includes('category'));
+        const taskK = Object.keys(cleanR).find(k => k.includes('task') || k.includes('deliverable') || k.includes('completed'));
+        const distK = Object.keys(cleanR).find(k => k.includes('distraction'));
+
+        const cat = catK ? cleanR[catK] : '-';
+        const task = taskK ? cleanR[taskK] : '-';
+        const dist = distK ? cleanR[distK] : '0';
+
         return `
           <tr>
             <td>${timestamp.split(' ')[0]}</td>
