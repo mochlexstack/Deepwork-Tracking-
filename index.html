@@ -72,11 +72,11 @@
       <table>
         <thead>
           <tr>
-            <th>Date & Time</th>
+            <th>Date</th>
             <th>Participant</th>
             <th>Category</th>
-            <th>Deliverable</th>
-            <th>Distractions</th>
+            <th>Deliverable / Task</th>
+            <th>Checklist</th>
           </tr>
         </thead>
         <tbody id="session-feed">
@@ -87,19 +87,12 @@
   </div>
 
   <script>
-    // ==========================================
-    // 1. CONFIGURATION
-    // ==========================================
     const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTnGFKxe_SzQw5EzArsg6Hfbf-R5mOgVA9wigsN6ru6C_--oFta6FaUMjzLE_x7FSBK1Fr6Jj3ENx14/pub?gid=472028699&single=true&output=csv';
 
-    // Optional: Map specific emails to custom display names
     const DISPLAY_NAMES = {
       'alex@example.com': 'Alex'
     };
 
-    // ==========================================
-    // 2. HELPER FUNCTIONS
-    // ==========================================
     function formatEmailToName(email) {
       if (!email || !email.includes('@')) return email || 'Unknown';
       if (DISPLAY_NAMES[email.toLowerCase()]) return DISPLAY_NAMES[email.toLowerCase()];
@@ -110,15 +103,24 @@
         .replace(/\b\w/g, c => c.toUpperCase());
     }
 
-    // ==========================================
-    // 3. FETCH & PARSE DATA
-    // ==========================================
+    // Helper to extract values by matching key phrases in your form questions
+    function getFormValue(row, keywords, exclude = []) {
+      const keys = Object.keys(row);
+      for (const k of keys) {
+        const lower = k.trim().toLowerCase();
+        const matches = keywords.some(w => lower.includes(w));
+        const excluded = exclude.some(w => lower.includes(w));
+        if (matches && !excluded && row[k] !== undefined && row[k] !== '') {
+          return row[k];
+        }
+      }
+      return '';
+    }
+
     async function loadData() {
       try {
         const response = await fetch(CSV_URL);
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const csvText = await response.text();
 
         Papa.parse(csvText, {
@@ -144,51 +146,56 @@
           `<div style="text-align:center; color:#ef4444; padding: 1.5rem; background: var(--card-bg); border-radius: 12px; border: 1px solid var(--border);">
             <p><strong>Failed to fetch data.</strong></p>
             <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">
-              Make sure you are viewing this page on your live <strong>GitHub Pages (https://)</strong> URL rather than opening the file locally on your computer.
+              Make sure you are viewing this page on your live GitHub Pages (https://) URL.
             </p>
           </div>`;
       }
     }
 
-    // ==========================================
-    // 4. PROCESS & RENDER
-    // ==========================================
     function processData(rows) {
       const users = {};
 
       rows.forEach(row => {
-        const cleanRow = {};
-        Object.keys(row).forEach(k => cleanRow[k.trim().toLowerCase()] = row[k]);
+        // 1. Extract Name / Email
+        const email = getFormValue(row, ['email', 'username']);
+        const name = getFormValue(row, ['name', 'participant', 'who'], ['wake', 'first', 'hour']);
+        
+        let rawUser = email || name;
+        let displayName = email ? formatEmailToName(email) : (name || 'Unknown');
 
-        // Flexible key matching for Email / Participant Name
-        const emailKey = Object.keys(cleanRow).find(k => k.includes('email') || k.includes('username'));
-        const nameKey = Object.keys(cleanRow).find(k => k.includes('name') || k.includes('participant') || k.includes('member'));
+        if (!rawUser || displayName === 'Unknown') return;
 
-        let rawUser = '';
-        let displayName = '';
-
-        if (emailKey && cleanRow[emailKey]) {
-          rawUser = cleanRow[emailKey].trim();
-          displayName = formatEmailToName(rawUser);
-        } else if (nameKey && cleanRow[nameKey]) {
-          rawUser = cleanRow[nameKey].trim();
-          displayName = rawUser;
-        } else {
-          rawUser = Object.values(row)[1] ? Object.values(row)[1].trim() : '';
-          displayName = rawUser.includes('@') ? formatEmailToName(rawUser) : rawUser;
-        }
-
-        if (!rawUser || displayName === 'Unknown' || displayName === '') return;
-
-        // Distraction count
-        const distKey = Object.keys(cleanRow).find(k => k.includes('distraction'));
-        const distractions = parseInt(distKey ? cleanRow[distKey] : 0) || 0;
+        // 2. Count Completed Checklist Items (out of 5)
+        const checklistKeys = ['10x', 'motivation', 'top 5', '2.0', 'thought habits'];
+        let checklistCompleted = 0;
+        
+        Object.keys(row).forEach(k => {
+          const lower = k.toLowerCase();
+          const isChecklist = checklistKeys.some(w => lower.includes(w));
+          const val = String(row[k]).trim().toLowerCase();
+          if (isChecklist && (val === 'true' || val === 'yes' || val === '1')) {
+            checklistCompleted++;
+          }
+        });
 
         if (!users[rawUser]) {
-          users[rawUser] = { name: displayName, identifier: rawUser, hours: 0, distractions: 0 };
+          users[rawUser] = { 
+            name: displayName, 
+            identifier: rawUser, 
+            hours: 0, 
+            checklistScore: 0,
+            latestWake: '',
+            latestFirstHour: ''
+          };
         }
-        users[rawUser].hours += 1; // 1 submission = 1 deep work hour
-        users[rawUser].distractions += distractions;
+        users[rawUser].hours += 1;
+        users[rawUser].checklistScore += checklistCompleted;
+
+        const wakeTime = getFormValue(row, ['wake up', 'woken']);
+        if (wakeTime) users[rawUser].latestWake = wakeTime;
+
+        const firstHour = getFormValue(row, ['complete your first', 'first deep work']);
+        if (firstHour) users[rawUser].latestFirstHour = firstHour;
       });
 
       const sortedUsers = Object.values(users).sort((a, b) => b.hours - a.hours);
@@ -198,59 +205,60 @@
       if (sortedUsers.length === 0) {
         leaderboardEl.innerHTML = `<p style="text-align:center; color:var(--text-muted);">No entries recorded yet.</p>`;
       } else {
-        leaderboardEl.innerHTML = sortedUsers.map((u, i) => `
-          <div class="card rank-${i + 1}">
-            <div class="rank-name">
-              <div class="rank-badge">${i + 1}</div>
-              <div class="user-info">
-                <h3>${u.name}</h3>
-                <span>${u.distractions} total distractions recorded</span>
+        leaderboardEl.innerHTML = sortedUsers.map((u, i) => {
+          const avgChecklist = u.hours > 0 ? (u.checklistScore / (u.hours * 5) * 100).toFixed(0) : 0;
+          return `
+            <div class="card rank-${i + 1}">
+              <div class="rank-name">
+                <div class="rank-badge">${i + 1}</div>
+                <div class="user-info">
+                  <h3>${u.name}</h3>
+                  <span>${avgChecklist}% Auto-Suggestion Compliance</span>
+                </div>
+              </div>
+              <div class="stats">
+                <div class="stat-box">
+                  <div class="val">${u.hours}h</div>
+                  <div class="label">Hours Logged</div>
+                </div>
               </div>
             </div>
-            <div class="stats">
-              <div class="stat-box">
-                <div class="val">${u.hours}h</div>
-                <div class="label">Hours Logged</div>
-              </div>
-            </div>
-          </div>
-        `).join('');
+          `;
+        }).join('');
       }
 
-      // Render Feed Table
+      // Render Session Feed
       const feedEl = document.getElementById('session-feed');
       const validRows = rows.filter(r => Object.values(r).some(v => v !== ''));
       const recentRows = validRows.slice(-8).reverse();
 
       feedEl.innerHTML = recentRows.map(r => {
-        const cleanR = {};
-        Object.keys(r).forEach(k => cleanR[k.trim().toLowerCase()] = r[k]);
+        const dateVal = getFormValue(r, ['date', 'timestamp']) || Object.values(r)[0] || '';
+        const email = getFormValue(r, ['email']);
+        const name = getFormValue(r, ['name', 'participant'], ['wake', 'first']);
+        const feedName = email ? formatEmailToName(email) : (name || '-');
 
-        const values = Object.values(r);
-        const timestamp = values[0] || '';
+        const cat = getFormValue(r, ['category']) || '-';
+        const task = getFormValue(r, ['what did you do', 'during this hour', 'task', 'deliverable']) || '-';
 
-        const emailK = Object.keys(cleanR).find(k => k.includes('email') || k.includes('username'));
-        const nameK = Object.keys(cleanR).find(k => k.includes('name') || k.includes('participant'));
-        const catK = Object.keys(cleanR).find(k => k.includes('category'));
-        const taskK = Object.keys(cleanR).find(k => k.includes('task') || k.includes('deliverable') || k.includes('completed') || k.includes('detail'));
-        const distK = Object.keys(cleanR).find(k => k.includes('distraction'));
-
-        let feedName = '-';
-        if (emailK && cleanR[emailK]) feedName = formatEmailToName(cleanR[emailK].trim());
-        else if (nameK && cleanR[nameK]) feedName = cleanR[nameK].trim();
-        else if (values[1]) feedName = values[1].includes('@') ? formatEmailToName(values[1]) : values[1];
-
-        const cat = catK ? cleanR[catK] : (values[3] || '-');
-        const task = taskK ? cleanR[taskK] : (values[4] || '-');
-        const dist = distK ? cleanR[distK] : (values[5] || '0');
+        // Count checklist adherence for this session
+        const checklistKeys = ['10x', 'motivation', 'top 5', '2.0', 'thought habits'];
+        let checks = 0;
+        Object.keys(r).forEach(k => {
+          const lower = k.toLowerCase();
+          if (checklistKeys.some(w => lower.includes(w))) {
+            const val = String(r[k]).trim().toLowerCase();
+            if (val === 'true' || val === 'yes' || val === '1') checks++;
+          }
+        });
 
         return `
           <tr>
-            <td>${timestamp.split(' ')[0]}</td>
+            <td>${dateVal.split(' ')[0]}</td>
             <td><strong>${feedName}</strong></td>
             <td>${cat}</td>
             <td>${task}</td>
-            <td>${dist}</td>
+            <td>${checks}/5 Reviewed</td>
           </tr>
         `;
       }).join('');
