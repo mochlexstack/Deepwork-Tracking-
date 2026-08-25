@@ -73,7 +73,7 @@
         <thead>
           <tr>
             <th>Date & Time</th>
-            <th>Name</th>
+            <th>Participant</th>
             <th>Category</th>
             <th>Deliverable</th>
             <th>Distractions</th>
@@ -87,17 +87,21 @@
   </div>
 
   <script>
-    // 1. Paste your published Google Sheet CSV link here:
-    const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTnGFKxe_SzQw5EzArsg6Hfbf-R5mOgVA9wigsN6ru6C_--oFta6FaUMjzLE_x7FSBK1Fr6Jj3ENx14/pub?gid=472028699&single=true&output=csv';
+    // ==========================================
+    // 1. CONFIGURATION
+    // ==========================================
+    const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTnGFKxe_SzQw5EzArsg6Hfbf-R5mOgVA9wigsN6ru6C_--oFta6FaUMjzLE_x7FSBK1Fr6Jj3ENx14/pub?gid=472028699&single=true&output=csv';
 
-    // 2. (Optional) Custom nickname mapping by email
+    // Optional: Map specific emails to custom display names
     const DISPLAY_NAMES = {
-      'alex@example.com': 'Alex',
-      // 'another.email@gmail.com': 'Sarah'
+      'alex@example.com': 'Alex'
     };
 
+    // ==========================================
+    // 2. HELPER FUNCTIONS
+    // ==========================================
     function formatEmailToName(email) {
-      if (!email || !email.includes('@')) return 'Unknown';
+      if (!email || !email.includes('@')) return email || 'Unknown';
       if (DISPLAY_NAMES[email.toLowerCase()]) return DISPLAY_NAMES[email.toLowerCase()];
 
       const userHandle = email.split('@')[0];
@@ -106,21 +110,49 @@
         .replace(/\b\w/g, c => c.toUpperCase());
     }
 
-    function loadData() {
-      Papa.parse(SHEET_CSV_URL, {
-        download: true,
-        header: true,
-        skipEmptyLines: true,
-        complete: function(results) {
-          processData(results.data);
-        },
-        error: function(err) {
-          document.getElementById('leaderboard').innerHTML = 
-            `<p style="text-align:center; color:#ef4444;">Failed to fetch data. Check your published CSV link.</p>`;
+    // ==========================================
+    // 3. FETCH & PARSE DATA
+    // ==========================================
+    async function loadData() {
+      try {
+        const response = await fetch(CSV_URL);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
-      });
+        const csvText = await response.text();
+
+        Papa.parse(csvText, {
+          header: true,
+          skipEmptyLines: true,
+          complete: function(results) {
+            if (!results.data || results.data.length === 0) {
+              document.getElementById('leaderboard').innerHTML = 
+                `<p style="text-align:center; color:var(--text-muted);">No form submissions found yet.</p>`;
+              return;
+            }
+            processData(results.data);
+          },
+          error: function(err) {
+            console.error("PapaParse Error:", err);
+            document.getElementById('leaderboard').innerHTML = 
+              `<p style="text-align:center; color:#ef4444;">Error parsing data from spreadsheet.</p>`;
+          }
+        });
+      } catch (error) {
+        console.error("Fetch Error:", error);
+        document.getElementById('leaderboard').innerHTML = 
+          `<div style="text-align:center; color:#ef4444; padding: 1.5rem; background: var(--card-bg); border-radius: 12px; border: 1px solid var(--border);">
+            <p><strong>Failed to fetch data.</strong></p>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">
+              Make sure you are viewing this page on your live <strong>GitHub Pages (https://)</strong> URL rather than opening the file locally on your computer.
+            </p>
+          </div>`;
+      }
     }
 
+    // ==========================================
+    // 4. PROCESS & RENDER
+    // ==========================================
     function processData(rows) {
       const users = {};
 
@@ -128,23 +160,35 @@
         const cleanRow = {};
         Object.keys(row).forEach(k => cleanRow[k.trim().toLowerCase()] = row[k]);
 
-        const emailKey = Object.keys(cleanRow).find(k => 
-          k.includes('email') || k.includes('username')
-        );
+        // Flexible key matching for Email / Participant Name
+        const emailKey = Object.keys(cleanRow).find(k => k.includes('email') || k.includes('username'));
+        const nameKey = Object.keys(cleanRow).find(k => k.includes('name') || k.includes('participant') || k.includes('member'));
 
-        const email = emailKey ? cleanRow[emailKey].trim() : '';
-        const name = formatEmailToName(email);
+        let rawUser = '';
+        let displayName = '';
 
-        if (!email || name === 'Unknown') return;
+        if (emailKey && cleanRow[emailKey]) {
+          rawUser = cleanRow[emailKey].trim();
+          displayName = formatEmailToName(rawUser);
+        } else if (nameKey && cleanRow[nameKey]) {
+          rawUser = cleanRow[nameKey].trim();
+          displayName = rawUser;
+        } else {
+          rawUser = Object.values(row)[1] ? Object.values(row)[1].trim() : '';
+          displayName = rawUser.includes('@') ? formatEmailToName(rawUser) : rawUser;
+        }
 
+        if (!rawUser || displayName === 'Unknown' || displayName === '') return;
+
+        // Distraction count
         const distKey = Object.keys(cleanRow).find(k => k.includes('distraction'));
         const distractions = parseInt(distKey ? cleanRow[distKey] : 0) || 0;
 
-        if (!users[email]) {
-          users[email] = { name: name, email: email, hours: 0, distractions: 0 };
+        if (!users[rawUser]) {
+          users[rawUser] = { name: displayName, identifier: rawUser, hours: 0, distractions: 0 };
         }
-        users[email].hours += 1;
-        users[email].distractions += distractions;
+        users[rawUser].hours += 1; // 1 submission = 1 deep work hour
+        users[rawUser].distractions += distractions;
       });
 
       const sortedUsers = Object.values(users).sort((a, b) => b.hours - a.hours);
@@ -173,7 +217,7 @@
         `).join('');
       }
 
-      // Render Feed
+      // Render Feed Table
       const feedEl = document.getElementById('session-feed');
       const validRows = rows.filter(r => Object.values(r).some(v => v !== ''));
       const recentRows = validRows.slice(-8).reverse();
@@ -182,23 +226,28 @@
         const cleanR = {};
         Object.keys(r).forEach(k => cleanR[k.trim().toLowerCase()] = r[k]);
 
-        const timestamp = Object.values(r)[0] || '';
-        const emailK = Object.keys(cleanR).find(k => k.includes('email'));
-        const email = emailK ? cleanR[emailK].trim() : '';
-        const name = formatEmailToName(email);
+        const values = Object.values(r);
+        const timestamp = values[0] || '';
 
+        const emailK = Object.keys(cleanR).find(k => k.includes('email') || k.includes('username'));
+        const nameK = Object.keys(cleanR).find(k => k.includes('name') || k.includes('participant'));
         const catK = Object.keys(cleanR).find(k => k.includes('category'));
-        const taskK = Object.keys(cleanR).find(k => k.includes('task') || k.includes('deliverable') || k.includes('completed'));
+        const taskK = Object.keys(cleanR).find(k => k.includes('task') || k.includes('deliverable') || k.includes('completed') || k.includes('detail'));
         const distK = Object.keys(cleanR).find(k => k.includes('distraction'));
 
-        const cat = catK ? cleanR[catK] : '-';
-        const task = taskK ? cleanR[taskK] : '-';
-        const dist = distK ? cleanR[distK] : '0';
+        let feedName = '-';
+        if (emailK && cleanR[emailK]) feedName = formatEmailToName(cleanR[emailK].trim());
+        else if (nameK && cleanR[nameK]) feedName = cleanR[nameK].trim();
+        else if (values[1]) feedName = values[1].includes('@') ? formatEmailToName(values[1]) : values[1];
+
+        const cat = catK ? cleanR[catK] : (values[3] || '-');
+        const task = taskK ? cleanR[taskK] : (values[4] || '-');
+        const dist = distK ? cleanR[distK] : (values[5] || '0');
 
         return `
           <tr>
             <td>${timestamp.split(' ')[0]}</td>
-            <td><strong>${name}</strong></td>
+            <td><strong>${feedName}</strong></td>
             <td>${cat}</td>
             <td>${task}</td>
             <td>${dist}</td>
