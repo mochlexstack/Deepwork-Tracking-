@@ -168,9 +168,7 @@
       return '';
     }
 
-    // Helper: Resolves participant name by checking form choice first, then email
     function resolveParticipantName(row) {
-      // 1. Direct match on "Who is answering", "Who's answering", "Participant", "Name"
       const selectedName = getFormValue(row, [
         'who is answering', 
         "who's answering", 
@@ -186,13 +184,11 @@
         return selectedName;
       }
 
-      // 2. Fallback to Email if no name question was answered
       const email = getFormValue(row, ['email', 'username']);
       if (email) {
         return formatEmailToName(email);
       }
 
-      // 3. Fallback to generic "name" field or unknown
       const fallbackName = getFormValue(row, ['name'], ['wake', 'first', 'hour', 'email']);
       return fallbackName || 'Unknown';
     }
@@ -252,12 +248,32 @@
       renderDashboard();
     }
 
+    // Resilient data loader with fallback proxies to bypass browser CORS blocks
     async function loadData() {
-      try {
-        const response = await fetch(CSV_URL);
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const csvText = await response.text();
+      const endpoints = [
+        CSV_URL,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(CSV_URL)}`,
+        `https://corsproxy.io/?url=${encodeURIComponent(CSV_URL)}`
+      ];
 
+      let csvText = null;
+
+      for (const url of endpoints) {
+        try {
+          const response = await fetch(url);
+          if (response.ok) {
+            const text = await response.text();
+            if (text && text.trim().length > 0 && !text.includes('<!DOCTYPE html>')) {
+              csvText = text;
+              break;
+            }
+          }
+        } catch (err) {
+          console.warn('Endpoint fetch failed:', url, err);
+        }
+      }
+
+      if (csvText) {
         Papa.parse(csvText, {
           header: true,
           skipEmptyLines: true,
@@ -271,31 +287,49 @@
             renderDashboard();
           },
           error: function(err) {
-            console.error("PapaParse Error:", err);
-            document.getElementById('leaderboard').innerHTML = 
-              `<p style="text-align:center; color:#ef4444;">Error parsing data from spreadsheet.</p>`;
+            console.error('PapaParse error:', err);
+            showErrorUI();
           }
         });
-      } catch (error) {
-        console.error("Fetch Error:", error);
-        document.getElementById('leaderboard').innerHTML = 
-          `<div style="text-align:center; color:#ef4444; padding: 1.5rem; background: var(--card-bg); border-radius: 12px; border: 1px solid var(--border);">
-            <p><strong>Failed to fetch data.</strong></p>
-            <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">
-              Make sure you are viewing this page on your live GitHub Pages (https://) URL.
-            </p>
-          </div>`;
+      } else {
+        // Fallback directly to PapaParse downloader
+        Papa.parse(CSV_URL, {
+          download: true,
+          header: true,
+          skipEmptyLines: true,
+          complete: function(results) {
+            if (results.data && results.data.length > 0) {
+              rawDataRows = results.data;
+              renderDashboard();
+            } else {
+              showErrorUI();
+            }
+          },
+          error: function() {
+            showErrorUI();
+          }
+        });
       }
     }
 
-    function processData(rows) {
+    function showErrorUI() {
+      document.getElementById('leaderboard').innerHTML = 
+        `<div style="text-align:center; color:#ef4444; padding: 1.5rem; background: var(--card-bg); border-radius: 12px; border: 1px solid var(--border);">
+          <p><strong>Failed to fetch data.</strong></p>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">
+            Please ensure your spreadsheet in Google Sheets is set to <strong>File > Share > Publish to web</strong> as CSV.
+          </p>
+        </div>`;
+    }
+
+    function renderDashboard() {
+      const filteredRows = filterRowsByPeriod(rawDataRows, currentPeriod);
       const users = {};
 
-      rows.forEach(row => {
+      filteredRows.forEach(row => {
         const displayName = resolveParticipantName(row);
         if (!displayName || displayName === 'Unknown') return;
 
-        // Count checklist completions
         const checklistKeys = ['10x', 'motivation', 'top 5', '2.0', 'thought habits'];
         let checks = 0;
         Object.keys(row).forEach(k => {
@@ -326,7 +360,6 @@
 
       const sortedUsers = Object.values(users).sort((a, b) => b.hours - a.hours);
 
-      // Render Leaderboard Cards
       const leaderboardEl = document.getElementById('leaderboard');
       if (sortedUsers.length === 0) {
         leaderboardEl.innerHTML = `<p style="text-align:center; color:var(--text-muted); padding: 2rem;">No deep work hours logged for this period.</p>`;
@@ -357,7 +390,6 @@
         }).join('');
       }
 
-      // Render Feed Table
       const feedEl = document.getElementById('session-feed');
       const validRows = rawDataRows.filter(r => Object.values(r).some(v => v !== ''));
       const recentRows = validRows.slice(-10).reverse();
