@@ -16,10 +16,11 @@
       --silver: #94a3b8;
       --bronze: #d97706;
       --border: #334155;
+      --badge-bg: #0284c7;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
     body { background-color: var(--bg); color: var(--text); padding: 2rem 1rem; }
-    .container { max-width: 900px; margin: 0 auto; }
+    .container { max-width: 1050px; margin: 0 auto; }
     header { text-align: center; margin-bottom: 2.5rem; }
     h1 { font-size: 2.25rem; font-weight: 800; color: var(--accent); margin-bottom: 0.5rem; }
     p.subtitle { color: var(--text-muted); font-size: 1rem; }
@@ -32,28 +33,34 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
       transition: transform 0.2s, border-color 0.2s;
     }
     .card:hover { transform: translateY(-2px); border-color: var(--accent); }
     .rank-name { display: flex; align-items: center; gap: 1rem; }
     .rank-badge {
-      width: 36px; height: 36px; border-radius: 50%;
+      width: 38px; height: 38px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
       font-weight: 700; font-size: 1.1rem; background: var(--border);
     }
     .rank-1 .rank-badge { background: var(--gold); color: #000; }
     .rank-2 .rank-badge { background: var(--silver); color: #000; }
     .rank-3 .rank-badge { background: var(--bronze); color: #fff; }
-    .user-info h3 { font-size: 1.15rem; font-weight: 700; }
-    .user-info span { font-size: 0.85rem; color: var(--text-muted); }
+    .user-info h3 { font-size: 1.15rem; font-weight: 700; margin-bottom: 0.2rem; }
+    .user-meta { display: flex; gap: 0.6rem; font-size: 0.8rem; color: var(--text-muted); flex-wrap: wrap; }
+    .meta-tag { background: rgba(56, 189, 248, 0.1); color: var(--accent); padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.2); }
     .stats { display: flex; gap: 2rem; text-align: right; }
     .stat-box .val { font-size: 1.35rem; font-weight: 800; color: var(--accent); }
     .stat-box .label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; }
-    .feed { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; }
+    .feed { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; overflow-x: auto; }
     .feed h2 { font-size: 1.25rem; margin-bottom: 1rem; color: var(--text); }
-    table { width: 100%; border-collapse: collapse; text-align: left; }
-    th, td { padding: 0.75rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    table { width: 100%; border-collapse: collapse; text-align: left; min-width: 700px; }
+    th, td { padding: 0.75rem; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
     th { color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 0.75rem; }
+    .pill { padding: 3px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; }
+    .pill-green { background: #166534; color: #bbf7d0; }
+    .pill-yellow { background: #854d0e; color: #fef08a; }
   </style>
 </head>
 <body>
@@ -74,13 +81,15 @@
           <tr>
             <th>Date</th>
             <th>Participant</th>
+            <th>Wake Up</th>
+            <th>1st Hour Finished</th>
             <th>Category</th>
             <th>Deliverable / Task</th>
-            <th>Checklist</th>
+            <th>Auto-Suggestion</th>
           </tr>
         </thead>
         <tbody id="session-feed">
-          <tr><td colspan="5" style="text-align:center; color:var(--text-muted);">Fetching responses...</td></tr>
+          <tr><td colspan="7" style="text-align:center; color:var(--text-muted);">Fetching responses...</td></tr>
         </tbody>
       </table>
     </div>
@@ -103,15 +112,14 @@
         .replace(/\b\w/g, c => c.toUpperCase());
     }
 
-    // Helper to extract values by matching key phrases in your form questions
     function getFormValue(row, keywords, exclude = []) {
       const keys = Object.keys(row);
       for (const k of keys) {
         const lower = k.trim().toLowerCase();
         const matches = keywords.some(w => lower.includes(w));
         const excluded = exclude.some(w => lower.includes(w));
-        if (matches && !excluded && row[k] !== undefined && row[k] !== '') {
-          return row[k];
+        if (matches && !excluded && row[k] !== undefined && String(row[k]).trim() !== '') {
+          return String(row[k]).trim();
         }
       }
       return '';
@@ -156,7 +164,6 @@
       const users = {};
 
       rows.forEach(row => {
-        // 1. Extract Name / Email
         const email = getFormValue(row, ['email', 'username']);
         const name = getFormValue(row, ['name', 'participant', 'who'], ['wake', 'first', 'hour']);
         
@@ -165,18 +172,19 @@
 
         if (!rawUser || displayName === 'Unknown') return;
 
-        // 2. Count Completed Checklist Items (out of 5)
+        // Count checklist completions
         const checklistKeys = ['10x', 'motivation', 'top 5', '2.0', 'thought habits'];
-        let checklistCompleted = 0;
-        
+        let checks = 0;
         Object.keys(row).forEach(k => {
           const lower = k.toLowerCase();
-          const isChecklist = checklistKeys.some(w => lower.includes(w));
-          const val = String(row[k]).trim().toLowerCase();
-          if (isChecklist && (val === 'true' || val === 'yes' || val === '1')) {
-            checklistCompleted++;
+          if (checklistKeys.some(w => lower.includes(w))) {
+            const val = String(row[k]).trim().toLowerCase();
+            if (val === 'true' || val === 'yes' || val === '1') checks++;
           }
         });
+
+        const wakeTime = getFormValue(row, ['wake up', 'woken']);
+        const firstHour = getFormValue(row, ['complete your first', 'first deep work']);
 
         if (!users[rawUser]) {
           users[rawUser] = { 
@@ -184,17 +192,13 @@
             identifier: rawUser, 
             hours: 0, 
             checklistScore: 0,
-            latestWake: '',
-            latestFirstHour: ''
+            latestWake: wakeTime || '-',
+            latestFirstHour: firstHour || '-'
           };
         }
         users[rawUser].hours += 1;
-        users[rawUser].checklistScore += checklistCompleted;
-
-        const wakeTime = getFormValue(row, ['wake up', 'woken']);
+        users[rawUser].checklistScore += checks;
         if (wakeTime) users[rawUser].latestWake = wakeTime;
-
-        const firstHour = getFormValue(row, ['complete your first', 'first deep work']);
         if (firstHour) users[rawUser].latestFirstHour = firstHour;
       });
 
@@ -213,7 +217,11 @@
                 <div class="rank-badge">${i + 1}</div>
                 <div class="user-info">
                   <h3>${u.name}</h3>
-                  <span>${avgChecklist}% Auto-Suggestion Compliance</span>
+                  <div class="user-meta">
+                    <span class="meta-tag">☀️ Wake: ${u.latestWake}</span>
+                    <span class="meta-tag">⏱️ 1st Hr Done: ${u.latestFirstHour}</span>
+                    <span class="meta-tag">🎯 Routine: ${avgChecklist}%</span>
+                  </div>
                 </div>
               </div>
               <div class="stats">
@@ -227,10 +235,10 @@
         }).join('');
       }
 
-      // Render Session Feed
+      // Render Feed Table
       const feedEl = document.getElementById('session-feed');
       const validRows = rows.filter(r => Object.values(r).some(v => v !== ''));
-      const recentRows = validRows.slice(-8).reverse();
+      const recentRows = validRows.slice(-10).reverse();
 
       feedEl.innerHTML = recentRows.map(r => {
         const dateVal = getFormValue(r, ['date', 'timestamp']) || Object.values(r)[0] || '';
@@ -238,10 +246,11 @@
         const name = getFormValue(r, ['name', 'participant'], ['wake', 'first']);
         const feedName = email ? formatEmailToName(email) : (name || '-');
 
+        const wake = getFormValue(r, ['wake up', 'woken']) || '-';
+        const firstHr = getFormValue(r, ['complete your first', 'first deep work']) || '-';
         const cat = getFormValue(r, ['category']) || '-';
         const task = getFormValue(r, ['what did you do', 'during this hour', 'task', 'deliverable']) || '-';
 
-        // Count checklist adherence for this session
         const checklistKeys = ['10x', 'motivation', 'top 5', '2.0', 'thought habits'];
         let checks = 0;
         Object.keys(r).forEach(k => {
@@ -252,13 +261,17 @@
           }
         });
 
+        const pillClass = checks >= 4 ? 'pill-green' : 'pill-yellow';
+
         return `
           <tr>
             <td>${dateVal.split(' ')[0]}</td>
             <td><strong>${feedName}</strong></td>
+            <td>${wake}</td>
+            <td>${firstHr}</td>
             <td>${cat}</td>
             <td>${task}</td>
-            <td>${checks}/5 Reviewed</td>
+            <td><span class="pill ${pillClass}">${checks}/5 Done</span></td>
           </tr>
         `;
       }).join('');
