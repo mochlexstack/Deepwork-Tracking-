@@ -168,7 +168,35 @@
       return '';
     }
 
-    // Helper to parse date from various spreadsheet string formats
+    // Helper: Resolves participant name by checking form choice first, then email
+    function resolveParticipantName(row) {
+      // 1. Direct match on "Who is answering", "Who's answering", "Participant", "Name"
+      const selectedName = getFormValue(row, [
+        'who is answering', 
+        "who's answering", 
+        'whos answering', 
+        'who are you', 
+        'participant name', 
+        'your name', 
+        'participant', 
+        'member'
+      ], ['wake', 'first', 'hour', 'email']);
+
+      if (selectedName && selectedName !== '') {
+        return selectedName;
+      }
+
+      // 2. Fallback to Email if no name question was answered
+      const email = getFormValue(row, ['email', 'username']);
+      if (email) {
+        return formatEmailToName(email);
+      }
+
+      // 3. Fallback to generic "name" field or unknown
+      const fallbackName = getFormValue(row, ['name'], ['wake', 'first', 'hour', 'email']);
+      return fallbackName || 'Unknown';
+    }
+
     function parseRowDate(row) {
       const dateStr = getFormValue(row, ['timestamp', 'date', 'time']) || Object.values(row)[0] || '';
       if (!dateStr) return null;
@@ -176,7 +204,6 @@
       const d = new Date(dateStr);
       if (!isNaN(d.getTime())) return d;
       
-      // Fallback for DD/MM/YYYY
       const parts = dateStr.split(/[\/\- :]/);
       if (parts.length >= 3) {
         const year = parts[2].length === 4 ? parts[2] : parts[0];
@@ -188,14 +215,13 @@
       return null;
     }
 
-    // Filter rows by the selected timeframe
     function filterRowsByPeriod(rows, period) {
       if (period === 'all') return rows;
       
       const now = new Date();
       return rows.filter(row => {
         const rowDate = parseRowDate(row);
-        if (!rowDate) return true; // keep if date parsing isn't clear
+        if (!rowDate) return true;
 
         const diffTime = now - rowDate;
         const diffDays = diffTime / (1000 * 60 * 60 * 24);
@@ -262,18 +288,12 @@
       }
     }
 
-    function renderDashboard() {
-      const filteredRows = filterRowsByPeriod(rawDataRows, currentPeriod);
+    function processData(rows) {
       const users = {};
 
-      filteredRows.forEach(row => {
-        const email = getFormValue(row, ['email', 'username']);
-        const name = getFormValue(row, ['name', 'participant', 'who'], ['wake', 'first', 'hour']);
-        
-        let rawUser = email || name;
-        let displayName = email ? formatEmailToName(email) : (name || 'Unknown');
-
-        if (!rawUser || displayName === 'Unknown') return;
+      rows.forEach(row => {
+        const displayName = resolveParticipantName(row);
+        if (!displayName || displayName === 'Unknown') return;
 
         // Count checklist completions
         const checklistKeys = ['10x', 'motivation', 'top 5', '2.0', 'thought habits'];
@@ -289,20 +309,19 @@
         const wakeTime = getFormValue(row, ['wake up', 'woken']);
         const firstHour = getFormValue(row, ['complete your first', 'first deep work']);
 
-        if (!users[rawUser]) {
-          users[rawUser] = { 
+        if (!users[displayName]) {
+          users[displayName] = { 
             name: displayName, 
-            identifier: rawUser, 
             hours: 0, 
             checklistScore: 0,
             latestWake: wakeTime || '-',
             latestFirstHour: firstHour || '-'
           };
         }
-        users[rawUser].hours += 1;
-        users[rawUser].checklistScore += checks;
-        if (wakeTime) users[rawUser].latestWake = wakeTime;
-        if (firstHour) users[rawUser].latestFirstHour = firstHour;
+        users[displayName].hours += 1;
+        users[displayName].checklistScore += checks;
+        if (wakeTime) users[displayName].latestWake = wakeTime;
+        if (firstHour) users[displayName].latestFirstHour = firstHour;
       });
 
       const sortedUsers = Object.values(users).sort((a, b) => b.hours - a.hours);
@@ -338,16 +357,14 @@
         }).join('');
       }
 
-      // Render Feed Table (Always shows the latest overall submissions)
+      // Render Feed Table
       const feedEl = document.getElementById('session-feed');
       const validRows = rawDataRows.filter(r => Object.values(r).some(v => v !== ''));
       const recentRows = validRows.slice(-10).reverse();
 
       feedEl.innerHTML = recentRows.map(r => {
         const dateVal = getFormValue(r, ['date', 'timestamp']) || Object.values(r)[0] || '';
-        const email = getFormValue(r, ['email']);
-        const name = getFormValue(r, ['name', 'participant'], ['wake', 'first']);
-        const feedName = email ? formatEmailToName(email) : (name || '-');
+        const feedName = resolveParticipantName(r);
 
         const wake = getFormValue(r, ['wake up', 'woken']) || '-';
         const firstHr = getFormValue(r, ['complete your first', 'first deep work']) || '-';
