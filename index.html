@@ -458,7 +458,7 @@
     </div>
 
     <div class="leaderboard-grid" id="leaderboard">
-      <p style="text-align:center; color:var(--text-muted); padding: 2rem;">Loading team data...</p>
+      <p style="text-align:center; color:var(--text-muted); padding: 2rem;">Connecting to spreadsheet...</p>
     </div>
 
     <div class="feed">
@@ -596,7 +596,7 @@
   </div>
 
   <script>
-    const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTnGFKxe_SzQw5EzArsg6Hfbf-R5mOgVA9wigsN6ru6C_--oFta6FaUMjzLE_x7FSBK1Fr6Jj3ENx14/pub?gid=472028699&single=true&output=csv';
+    const GOOGLE_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTnGFKxe_SzQw5EzArsg6Hfbf-R5mOgVA9wigsN6ru6C_--oFta6FaUMjzLE_x7FSBK1Fr6Jj3ENx14/pub?gid=472028699&single=true&output=csv';
     const MASTER_ADMIN_PIN = '0000'; 
     const PUSHUP_COST = 200;
 
@@ -654,6 +654,7 @@
     }
 
     function getFormValue(row, keywords, exclude = []) {
+      if (!row || typeof row !== 'object') return '';
       const keys = Object.keys(row);
       for (const k of keys) {
         const lower = k.trim().toLowerCase();
@@ -680,7 +681,7 @@
     }
 
     function parseRowDate(row) {
-      const dateStr = getFormValue(row, ['timestamp', 'date', 'time']) || Object.values(row)[0] || '';
+      const dateStr = getFormValue(row, ['timestamp', 'date', 'time']) || (row ? Object.values(row)[0] : '') || '';
       if (!dateStr) return null;
       const d = new Date(dateStr);
       if (!isNaN(d.getTime())) return d;
@@ -731,7 +732,6 @@
       return streak;
     }
 
-    // ECONOMY ENGINE: Base 20g/hr + 1g per routine checklist check (Max 25g/hr)
     function calculateRPGStats(hours, checklistScore) {
       const totalExp = hours * 100;
       const expPerLevel = 250;
@@ -743,7 +743,6 @@
       return { level, currentLevelExp, expPerLevel, expPercent, totalEarnedGold };
     }
 
-    // Weekly Countdown Timer to Sunday 11:59:59 PM
     function updateCountdownTimer() {
       const now = new Date();
       const nextSunday = new Date(now);
@@ -779,53 +778,51 @@
       renderDashboard();
     }
 
+    // MULTI-TIER DATA LOADER
     async function loadData() {
       const savedForfeit = localStorage.getItem('dw_weekly_forfeit');
       if (savedForfeit) {
-        document.getElementById('weekly-punishment-select').value = savedForfeit;
+        const sel = document.getElementById('weekly-punishment-select');
+        if (sel) sel.value = savedForfeit;
       }
 
       updateCountdownTimer();
       setInterval(updateCountdownTimer, 60000);
 
       const endpoints = [
-        CSV_URL,
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(CSV_URL)}`,
-        `https://corsproxy.io/?url=${encodeURIComponent(CSV_URL)}`
+        GOOGLE_CSV_URL,
+        '/api/sheet',
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(GOOGLE_CSV_URL)}`,
+        `https://corsproxy.io/?url=${encodeURIComponent(GOOGLE_CSV_URL)}`,
+        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(GOOGLE_CSV_URL)}`
       ];
 
       let csvText = null;
+
       for (const url of endpoints) {
         try {
-          const response = await fetch(url);
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 6000);
+          const response = await fetch(url, { signal: controller.signal });
+          clearTimeout(timeoutId);
+
           if (response.ok) {
             const text = await response.text();
-            if (text && text.trim().length > 0 && !text.includes('<!DOCTYPE html>')) {
+            if (text && text.trim().length > 0 && !text.includes('<!DOCTYPE html>') && !text.includes('<html')) {
               csvText = text;
               break;
             }
           }
         } catch (err) {
-          console.warn('Endpoint fallback:', url);
+          console.warn('Fallback endpoint bypassed:', url);
         }
       }
 
       if (csvText) {
-        Papa.parse(csvText, {
-          header: true,
-          skipEmptyLines: true,
-          complete: function(results) {
-            if (!results.data || results.data.length === 0) {
-              document.getElementById('leaderboard').innerHTML = `<p style="text-align:center; color:var(--text-muted);">No submissions found.</p>`;
-              return;
-            }
-            rawDataRows = results.data;
-            renderDashboard();
-          },
-          error: function() { showErrorUI(); }
-        });
+        processCSV(csvText);
       } else {
-        Papa.parse(CSV_URL, {
+        // Direct PapaParse stream fallback
+        Papa.parse(GOOGLE_CSV_URL, {
           download: true,
           header: true,
           skipEmptyLines: true,
@@ -834,20 +831,50 @@
               rawDataRows = results.data;
               renderDashboard();
             } else {
-              showErrorUI();
+              showErrorUI('No entries found in spreadsheet.');
             }
           },
-          error: function() { showErrorUI(); }
+          error: function() {
+            showErrorUI('Unable to fetch CSV. Please ensure the Google Sheet is published to web as CSV.');
+          }
         });
       }
     }
 
-    function showErrorUI() {
+    function processCSV(text) {
+      Papa.parse(text, {
+        header: true,
+        skipEmptyLines: true,
+        complete: function(results) {
+          if (!results.data || results.data.length === 0) {
+            showErrorUI('Spreadsheet is currently empty.');
+            return;
+          }
+          rawDataRows = results.data;
+          try {
+            renderDashboard();
+          } catch (renderErr) {
+            console.error('Render error:', renderErr);
+            showErrorUI('Data parse error. Inspect console (F12) for logs.');
+          }
+        },
+        error: function(err) {
+          console.error('CSV Parsing Error:', err);
+          showErrorUI('Failed to parse sheet data.');
+        }
+      });
+    }
+
+    function showErrorUI(msg) {
       document.getElementById('leaderboard').innerHTML = 
         `<div style="text-align:center; color:#ef4444; padding: 1.5rem; background: var(--card-bg); border-radius: 12px; border: 1px solid var(--border);">
-          <p><strong>Failed to fetch data.</strong></p>
-          <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">Ensure spreadsheet is published to web as CSV.</p>
+          <p><strong>${msg}</strong></p>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">
+            Make sure your Google Sheet is published to the web: <strong>File &rarr; Share &rarr; Publish to web &rarr; CSV</strong>.
+          </p>
         </div>`;
+      document.getElementById('session-feed').innerHTML = 
+        `<tr><td colspan="7" style="text-align:center; color:#ef4444;">${msg}</td></tr>`;
     }
 
     function triggerConfetti() {
@@ -941,7 +968,7 @@
       // 1. Leaderboard Cards
       const leaderboardEl = document.getElementById('leaderboard');
       if (sortedUsers.length === 0) {
-        leaderboardEl.innerHTML = `<p style="text-align:center; color:var(--text-muted); padding: 2rem;">No deep work hours recorded.</p>`;
+        leaderboardEl.innerHTML = `<p style="text-align:center; color:var(--text-muted); padding: 2rem;">No deep work hours recorded for this period.</p>`;
       } else {
         leaderboardEl.innerHTML = sortedUsers.map((u, i) => {
           const userObj = computedUsers[u.name];
@@ -958,7 +985,7 @@
             : `<span class="meta-tag meta-vulnerable">🎯 Vulnerable (${userObj.todayHours}h today)</span>`;
 
           let debtBadge = userObj.sec.pushupDebt > 0
-            ? `<span class="meta-debt" title="Click to clear debt after doing them" onclick="clearPushups('${u.name}')">🚨 Owes ${userObj.sec.pushupDebt} Pushups (Click to Clear)</span>`
+            ? `<span class="meta-debt" title="Click to clear debt after completing" onclick="clearPushups('${u.name}')">🚨 Owes ${userObj.sec.pushupDebt} Pushups (Click to Clear)</span>`
             : '';
 
           return `
@@ -1054,7 +1081,7 @@
         Object.keys(r).forEach(k => {
           const lower = k.toLowerCase();
           if (checklistKeys.some(w => lower.includes(w))) {
-            const val = String(row[k]).trim().toLowerCase();
+            const val = String(r[k]).trim().toLowerCase();
             if (val === 'true' || val === 'yes' || val === '1') checks++;
           }
         });
@@ -1079,9 +1106,7 @@
       document.getElementById(id).classList.remove('open');
     }
 
-    // =========================================================================
-    // PUSHUP SABOTEUR ATTACK ACTIONS
-    // =========================================================================
+    // PUSHUP SHOP ACTIONS
     function openShopModal() {
       const select = document.getElementById('shop-user-select');
       const userNames = Object.keys(computedUsers);
@@ -1122,7 +1147,6 @@
 
       const user = computedUsers[selectedName];
       document.getElementById('shop-auth-status').textContent = `🔓 Balance: ${user.availableGold} Gold`;
-      
       populateVulnerableTargets(selectedName);
     }
 
@@ -1198,9 +1222,7 @@
       }
     }
 
-    // =========================================================================
     // AVATAR SETTINGS
-    // =========================================================================
     function openAvatarModal() {
       const select = document.getElementById('avatar-user-select');
       const userNames = Object.keys(computedUsers);
@@ -1250,9 +1272,7 @@
       renderDashboard();
     }
 
-    // =========================================================================
     // PIN RESET (ADMIN OVERRIDE)
-    // =========================================================================
     function openResetPinModal() {
       const select = document.getElementById('reset-user-select');
       const userNames = Object.keys(computedUsers);
