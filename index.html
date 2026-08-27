@@ -74,7 +74,7 @@
     .badge-win { color: var(--gold-glow); font-weight: 800; }
     .badge-lose { color: var(--danger); font-weight: 800; }
 
-    /* Top Controls */
+    /* Controls */
     .top-controls {
       display: flex;
       justify-content: space-between;
@@ -380,21 +380,14 @@
 
   <script>
     const GOOGLE_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTnGFKxe_SzQw5EzArsg6Hfbf-R5mOgVA9wigsN6ru6C_--oFta6FaUMjzLE_x7FSBK1Fr6Jj3ENx14/pub?gid=472028699&single=true&output=csv';
-    
-    // (Optional) Paste your deployed Apps Script Web App URL here for cross-device live debt sync:
     const APPS_SCRIPT_WEBAPP_URL = ''; 
     const PUSHUP_COST = 200;
 
-    // Hardcoded global emoji dictionary (Add or modify icons for your group here)
     const PLAYER_EMOJIS = {
-      'Alex': '⚡',
-      'Participant 2': '🦁',
-      'Participant 3': '🥷',
-      'Participant 4': '👑',
-      'Participant 5': '🐺'
+      'Alex': '⚡'
     };
 
-    const EMOJI_FALLBACKS = ['🐉', '🦅', '🏎️', '🧙‍♂️', '⚔️', '🔥', '💎', '🚀'];
+    const EMOJI_FALLBACKS = ['🦁', '🥷', '👑', '🐺', '🐉', '🦅', '🏎️', '🧙‍♂️', '⚔️', '🔥'];
     const DISPLAY_NAMES = { 'alex@example.com': 'Alex' };
 
     let rawDataRows = [];
@@ -533,54 +526,61 @@
       updateCountdownTimer();
       setInterval(updateCountdownTimer, 60000);
 
-      const endpoints = [
-        GOOGLE_CSV_URL,
+      // Direct CSV parser execution with fallback
+      Papa.parse(GOOGLE_CSV_URL, {
+        download: true,
+        header: true,
+        skipEmptyLines: true,
+        complete: function(results) {
+          if (results.data && results.data.length > 0) {
+            rawDataRows = results.data;
+            renderDashboard();
+          } else {
+            tryFallbackFetch();
+          }
+        },
+        error: function() {
+          tryFallbackFetch();
+        }
+      });
+    }
+
+    async function tryFallbackFetch() {
+      const proxies = [
         '/api/sheet',
         `https://api.allorigins.win/raw?url=${encodeURIComponent(GOOGLE_CSV_URL)}`,
         `https://corsproxy.io/?url=${encodeURIComponent(GOOGLE_CSV_URL)}`
       ];
 
-      let csvText = null;
-      for (const url of endpoints) {
+      for (const url of proxies) {
         try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 6000);
-          const response = await fetch(url, { signal: controller.signal });
-          clearTimeout(timeoutId);
-          if (response.ok) {
-            const text = await response.text();
+          const res = await fetch(url);
+          if (res.ok) {
+            const text = await res.text();
             if (text && text.trim().length > 0 && !text.includes('<!DOCTYPE html>')) {
-              csvText = text;
-              break;
+              Papa.parse(text, {
+                header: true,
+                skipEmptyLines: true,
+                complete: function(results) {
+                  rawDataRows = results.data;
+                  renderDashboard();
+                }
+              });
+              return;
             }
           }
-        } catch (err) {
-          console.warn('Endpoint fallback:', url);
+        } catch (e) {
+          console.warn('Proxy bypass failed:', url);
         }
       }
 
-      if (csvText) {
-        Papa.parse(csvText, {
-          header: true,
-          skipEmptyLines: true,
-          complete: function(results) {
-            rawDataRows = results.data;
-            renderDashboard();
-          }
-        });
-      } else {
-        Papa.parse(GOOGLE_CSV_URL, {
-          download: true,
-          header: true,
-          skipEmptyLines: true,
-          complete: function(results) {
-            if (results.data && results.data.length > 0) {
-              rawDataRows = results.data;
-              renderDashboard();
-            }
-          }
-        });
-      }
+      document.getElementById('leaderboard').innerHTML = 
+        `<div style="text-align:center; color:#ef4444; padding: 1.5rem; background: var(--card-bg); border-radius: 12px; border: 1px solid var(--border);">
+          <p><strong>Failed to retrieve responses.</strong></p>
+          <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0.4rem;">Ensure your Google Sheet is published to web as CSV.</p>
+        </div>`;
+      document.getElementById('session-feed').innerHTML = 
+        `<tr><td colspan="7" style="text-align:center; color:#ef4444;">Error fetching data.</td></tr>`;
     }
 
     function triggerConfetti() {
@@ -764,41 +764,45 @@
 
       // 3. Session Feed
       const feedEl = document.getElementById('session-feed');
-      const validRows = rawDataRows.filter(r => Object.values(r).some(v => v !== ''));
+      const validRows = rawDataRows.filter(r => r && typeof r === 'object' && Object.values(r).some(v => v !== ''));
       const recentRows = validRows.slice(-10).reverse();
 
-      feedEl.innerHTML = recentRows.map((r, i) => {
-        const dateVal = getFormValue(r, ['date', 'timestamp']) || Object.values(r)[0] || '';
-        const feedName = resolveParticipantName(r);
-        const wake = getFormValue(r, ['wake up', 'woken']) || '-';
-        const firstHr = getFormValue(r, ['complete your first', 'first deep work']) || '-';
-        const cat = getFormValue(r, ['category']) || '-';
-        const task = getFormValue(r, ['what did you do', 'during this hour', 'task', 'deliverable']) || '-';
+      if (recentRows.length === 0) {
+        feedEl.innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No entries recorded yet.</td></tr>`;
+      } else {
+        feedEl.innerHTML = recentRows.map(r => {
+          const dateVal = getFormValue(r, ['date', 'timestamp']) || Object.values(r)[0] || '';
+          const feedName = resolveParticipantName(r);
+          const wake = getFormValue(r, ['wake up', 'woken']) || '-';
+          const firstHr = getFormValue(r, ['complete your first', 'first deep work']) || '-';
+          const cat = getFormValue(r, ['category']) || '-';
+          const task = getFormValue(r, ['what did you do', 'during this hour', 'task', 'deliverable']) || '-';
 
-        const checklistKeys = ['10x', 'motivation', 'top 5', '2.0', 'thought habits'];
-        let checks = 0;
-        Object.keys(r).forEach(k => {
-          const lower = k.toLowerCase();
-          if (checklistKeys.some(w => lower.includes(w))) {
-            const val = String(row[k]).trim().toLowerCase();
-            if (val === 'true' || val === 'yes' || val === '1') checks++;
-          }
-        });
+          const checklistKeys = ['10x', 'motivation', 'top 5', '2.0', 'thought habits'];
+          let checks = 0;
+          Object.keys(r).forEach(k => {
+            const lower = k.toLowerCase();
+            if (checklistKeys.some(w => lower.includes(w))) {
+              const val = String(r[k]).trim().toLowerCase();
+              if (val === 'true' || val === 'yes' || val === '1') checks++;
+            }
+          });
 
-        const pillClass = checks >= 4 ? 'pill-green' : 'pill-yellow';
+          const pillClass = checks >= 4 ? 'pill-green' : 'pill-yellow';
 
-        return `
-          <tr>
-            <td>${dateVal}</td>
-            <td><strong>${feedName}</strong></td>
-            <td>${wake}</td>
-            <td>${firstHr}</td>
-            <td>${cat}</td>
-            <td>${task}</td>
-            <td><span class="pill ${pillClass}">${checks}/5 Done (+${checks}g)</span></td>
-          </tr>
-        `;
-      }).join('');
+          return `
+            <tr>
+              <td>${dateVal}</td>
+              <td><strong>${feedName}</strong></td>
+              <td>${wake}</td>
+              <td>${firstHr}</td>
+              <td>${cat}</td>
+              <td>${task}</td>
+              <td><span class="pill ${pillClass}">${checks}/5 Done (+${checks}g)</span></td>
+            </tr>
+          `;
+        }).join('');
+      }
     }
 
     // Modal & Attack Actions
@@ -851,11 +855,9 @@
         return;
       }
 
-      // Update State Locally
       const currentDebt = parseInt(localStorage.getItem(`dw_pushups_${targetName}`) || '0', 10);
       localStorage.setItem(`dw_pushups_${targetName}`, (currentDebt + 20).toString());
 
-      // Send Global Sync to Apps Script if endpoint is configured
       if (APPS_SCRIPT_WEBAPP_URL) {
         try {
           fetch(APPS_SCRIPT_WEBAPP_URL, {
